@@ -1,0 +1,21 @@
+build/
+build_appimage/
+*.AppImage
+*.flatpak
+.cache/
+.vscode/
+.idea/
+*.user
+*.pro
+*.autosave
+CMakeLists.txt.user
+build_task/
+packaging/flatpak/install_deps.sh
+
+# Docker/Flatpak build artifacts
+.flatpak-cache/
+output_docker/
+packaging/flatpak/output/
+packaging/flatpak/build_dir/
+packaging/flatpak/repo/
+packaging/flatpak/.flatpak-builder/

@@ -1,0 +1,47 @@
+name: Build AppImage
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          cmake \
+          git \
+          wget \
+          file \
+          libusb-1.0-0-dev \
+          portaudio19-dev \
+          qt6-base-dev \
+          qt6-multimedia-dev \
+          libgl1-mesa-dev \
+          libxkbcommon-dev \
+          libxkbcommon-x11-dev \
+          libvulkan-dev \
+          appstream
+
+    - name: Build AppImage
+      env:
+        QMAKE: /usr/bin/qmake6
+      run: |
+        chmod +x packaging/appimage/build.sh
+        ./packaging/appimage/build.sh
+
+    - name: Upload AppImage
+      uses: actions/upload-artifact@v3
+      with:
+        name: MooerLooperManager-AppImage
+        path: MooerLooperManager*.AppImage

@@ -1,0 +1,49 @@
+app-id: io.github.shpala.MooerLooperManager
+runtime: org.kde.Platform
+runtime-version: '6.10'
+sdk: org.kde.Sdk
+command: MooerLooperManager
+finish-args:
+  - --share=ipc
+  - --socket=x11
+  - --socket=wayland
+  - --device=all
+  - --filesystem=home
+  - --share=network
+modules:
+  - name: libusb
+    buildsystem: autotools
+    sources:
+      - type: archive
+        url: https://github.com/libusb/libusb/releases/download/v1.0.27/libusb-1.0.27.tar.bz2
+        sha256: ffaa41d741a8a3bee244ac8e54a72ea05bf2879663c098c82fc5757853441575
+
+  - name: portaudio
+    buildsystem: cmake
+    config-opts:
+      - -DPA_USE_ALSA=ON
+      - -DPA_USE_JACK=OFF
+      - -DPA_BUILD_TESTS=OFF
+      - -DPA_BUILD_EXAMPLES=OFF
+    sources:
+      - type: archive
+        url: https://github.com/PortAudio/portaudio/archive/refs/tags/v19.7.0.tar.gz
+        sha256: 5af29ba58bbdbb7bbcefaaecc77ec8fc413f0db6f4c4e286c40c3e1b83174fa0
+      - type: patch
+        path: portaudio-cmake-fix.patch
+
+  - name: MooerLooperManager
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+    post-install:
+      - cp /app/share/icons/hicolor/256x256/apps/MooerLooperManager.png /app/share/icons/hicolor/256x256/apps/io.github.shpala.MooerLooperManager.png
+      - mkdir -p /app/share/icons/hicolor/64x64/apps
+      - cp /app/share/icons/hicolor/256x256/apps/MooerLooperManager.png /app/share/icons/hicolor/64x64/apps/io.github.shpala.MooerLooperManager.png
+      - mkdir -p /app/share/icons/hicolor/128x128/apps
+      - cp /app/share/icons/hicolor/256x256/apps/MooerLooperManager.png /app/share/icons/hicolor/128x128/apps/io.github.shpala.MooerLooperManager.png
+      - sed -i 's/Icon=MooerLooperManager/Icon=io.github.shpala.MooerLooperManager/' /app/share/applications/MooerLooperManager.desktop
+      - sed -i '$aStartupWMClass=MooerLooperManager' /app/share/applications/MooerLooperManager.desktop
+    sources:
+      - type: dir
+        path: ../../

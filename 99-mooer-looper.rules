@@ -1,0 +1,3 @@
+# Mooer GL100/GL200 Looper Pedal
+# This allows non-root users to access the device
+SUBSYSTEM=="usb", ATTRS{idVendor}=="34db", ATTRS{idProduct}=="0008", MODE="0666", TAG+="uaccess"

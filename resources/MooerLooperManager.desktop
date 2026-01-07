@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=MooerLooperManager
+Comment=Manage tracks on Mooer GL100/GL200 looper pedals
+Exec=MooerLooperManager
+Icon=MooerLooperManager
+Categories=AudioVideo;Audio;Utility;
+Terminal=false
+X-AppImage-License=MIT
+X-AppImage-Payload-License=MIT
