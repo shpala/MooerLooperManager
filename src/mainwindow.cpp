@@ -5,15 +5,97 @@
 #include <QHeaderView>
 #include <QFileDialog>
 #include <QMessageBox>
+#include <QApplication>
 #include <QColor>
 #include <QIcon>
 #include <iostream>
 
-MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), worker(nullptr), currentPlayingSlot(-1) {
+// HotplugMonitor implementation
+HotplugMonitor::HotplugMonitor(QObject* parent)
+    : QThread(parent), ctx(nullptr), callbackHandle(0), stopFlag(false) {
+    libusb_init(&ctx);
+}
+
+HotplugMonitor::~HotplugMonitor() {
+    stop();
+    if (ctx) {
+        libusb_exit(ctx);
+    }
+}
+
+void HotplugMonitor::stop() {
+    stopFlag = true;
+    if (ctx && callbackHandle) {
+        libusb_hotplug_deregister_callback(ctx, callbackHandle);
+        callbackHandle = 0;
+    }
+    if (isRunning()) {
+        // Interrupt the blocking libusb_handle_events call
+        libusb_interrupt_event_handler(ctx);
+        wait();
+    }
+}
+
+int HotplugMonitor::hotplugCallback(libusb_context* ctx, libusb_device* dev,
+                                     libusb_hotplug_event event, void* userData) {
+    Q_UNUSED(ctx);
+    Q_UNUSED(dev);
+    Q_UNUSED(event);
+    HotplugMonitor* monitor = static_cast<HotplugMonitor*>(userData);
+    emit monitor->deviceChanged();
+    return 0;  // Keep the callback registered
+}
+
+void HotplugMonitor::run() {
+    if (!libusb_has_capability(LIBUSB_CAP_HAS_HOTPLUG)) {
+        std::cerr << "Hotplug not supported on this platform" << std::endl;
+        return;
+    }
+
+    int rc = libusb_hotplug_register_callback(
+        ctx,
+        static_cast<libusb_hotplug_event>(LIBUSB_HOTPLUG_EVENT_DEVICE_ARRIVED | LIBUSB_HOTPLUG_EVENT_DEVICE_LEFT),
+        LIBUSB_HOTPLUG_NO_FLAGS,
+        Protocol::VENDOR_ID,
+        LIBUSB_HOTPLUG_MATCH_ANY,  // Any product ID
+        LIBUSB_HOTPLUG_MATCH_ANY,  // Any device class
+        hotplugCallback,
+        this,
+        &callbackHandle
+    );
+
+    if (rc != LIBUSB_SUCCESS) {
+        std::cerr << "Failed to register hotplug callback: " << libusb_error_name(rc) << std::endl;
+        return;
+    }
+
+    while (!stopFlag) {
+        int rc = libusb_handle_events(ctx);
+        if (rc < 0 && rc != LIBUSB_ERROR_INTERRUPTED) {
+            std::cerr << "libusb_handle_events error: " << libusb_error_name(rc) << std::endl;
+            break;
+        }
+    }
+}
+
+// MainWindow implementation
+MainWindow::MainWindow(QWidget *parent)
+    : QMainWindow(parent), worker(nullptr), hotplugMonitor(nullptr), currentPlayingSlot(-1) {
     setupUi();
+
+    hotplugMonitor = new HotplugMonitor(this);
+    connect(hotplugMonitor, &HotplugMonitor::deviceChanged, this, [this]() {
+        if (!device.isConnected()) {
+            refreshDeviceList();
+        }
+    });
+    hotplugMonitor->start();
 }
 
 MainWindow::~MainWindow() {
+    if (hotplugMonitor) {
+        hotplugMonitor->stop();
+    }
     stopExistingWorker();
 }
 
@@ -42,10 +124,22 @@ void MainWindow::setupUi() {
     setCentralWidget(centralWidget);
     QVBoxLayout* mainLayout = new QVBoxLayout(centralWidget);
 
+    QHBoxLayout* deviceLayout = new QHBoxLayout();
+    QLabel* deviceLabel = new QLabel("Device:");
+    deviceCombo = new QComboBox();
+    deviceCombo->setMinimumWidth(300);
+    QPushButton* refreshDevicesBtn = new QPushButton("Refresh");
+    connect(refreshDevicesBtn, &QPushButton::clicked, this, &MainWindow::onRefreshDevicesClicked);
+
+    deviceLayout->addWidget(deviceLabel);
+    deviceLayout->addWidget(deviceCombo, 1);
+    deviceLayout->addWidget(refreshDevicesBtn);
+    mainLayout->addLayout(deviceLayout);
+
     QHBoxLayout* topLayout = new QHBoxLayout();
     connectBtn = new QPushButton("Connect");
     connect(connectBtn, &QPushButton::clicked, this, &MainWindow::onConnectClicked);
-    
+
     statusLabel = new QLabel("Not Connected");
     statusLabel->setStyleSheet("color: red; font-weight: bold;");
 
@@ -58,6 +152,8 @@ void MainWindow::setupUi() {
     topLayout->addStretch();
     topLayout->addWidget(refreshBtn);
     mainLayout->addLayout(topLayout);
+
+    refreshDeviceList();
 
     trackTable = new QTableWidget();
     trackTable->setColumnCount(4);
@@ -80,6 +176,38 @@ void MainWindow::setupUi() {
     resize(900, 700);
 }
 
+void MainWindow::refreshDeviceList() {
+    deviceCombo->clear();
+    deviceList = USBDevice::enumerateDevices();
+
+    if (deviceList.empty()) {
+        deviceCombo->addItem("No devices found");
+        connectBtn->setEnabled(false);
+    } else {
+        connectBtn->setEnabled(true);
+        for (const auto& dev : deviceList) {
+            QString displayName = QString::fromStdString(dev.name);
+            if (!dev.serial.empty()) {
+                displayName += QString(" [%1]").arg(QString::fromStdString(dev.serial));
+            }
+            displayName += QString(" (USB VID: %1, PID: %2)")
+                .arg(dev.vid, 4, 16, QChar('0')).arg(dev.pid, 4, 16, QChar('0'));
+            if (!dev.hasPermission) {
+                displayName += " - No permission";
+            }
+            deviceCombo->addItem(displayName);
+        }
+    }
+}
+
+void MainWindow::onRefreshDevicesClicked() {
+    if (device.isConnected()) {
+        QMessageBox::warning(this, "Warning", "Disconnect before refreshing device list");
+        return;
+    }
+    refreshDeviceList();
+}
+
 void MainWindow::onConnectClicked() {
     if (device.isConnected()) {
         device.disconnect();
@@ -87,15 +215,60 @@ void MainWindow::onConnectClicked() {
         statusLabel->setText("Not Connected");
         statusLabel->setStyleSheet("color: red; font-weight: bold;");
         refreshBtn->setEnabled(false);
+        deviceCombo->setEnabled(true);
         trackTable->setRowCount(0);
         playButtons.clear();
         currentPlayingSlot = -1;
     } else {
-        if (device.connect()) {
+        int idx = deviceCombo->currentIndex();
+        if (idx < 0 || idx >= (int)deviceList.size()) {
+            QMessageBox::critical(this, "Error", "No device selected");
+            return;
+        }
+
+        const DeviceInfo& selectedDevice = deviceList[idx];
+
+        if (!selectedDevice.hasPermission) {
+#ifdef __linux__
+            int ret = QMessageBox::question(this, "Permission Required",
+                "Cannot access this USB device due to insufficient permissions.\n\n"
+                "Would you like to install the udev rule to fix this?\n"
+                "(This will require administrator privileges)",
+                QMessageBox::Yes | QMessageBox::No);
+
+            if (ret == QMessageBox::Yes) {
+                statusLabel->setText("Installing udev rule...");
+                if (USBDevice::installUdevRule()) {
+                    // Wait for udev to apply the new rules
+                    statusLabel->setText("Waiting for udev...");
+                    QApplication::processEvents();
+                    QThread::sleep(1);
+
+                    refreshDeviceList();
+                    // Retry connection with updated device list
+                    if (idx < (int)deviceList.size() && deviceList[idx].hasPermission) {
+                        statusLabel->setText("Connecting...");
+                        onConnectClicked();
+                        return;
+                    }
+                } else {
+                    QMessageBox::critical(this, "Error", "Failed to install udev rule");
+                }
+                statusLabel->setText("Not Connected");
+            }
+            return;
+#else
+            QMessageBox::critical(this, "Error", "Cannot access device - permission denied");
+            return;
+#endif
+        }
+
+        if (device.connect(selectedDevice.bus, selectedDevice.address)) {
             connectBtn->setText("Disconnect");
             statusLabel->setText("Connected");
             statusLabel->setStyleSheet("color: green; font-weight: bold;");
             refreshBtn->setEnabled(true);
+            deviceCombo->setEnabled(false);
             onRefreshClicked();
         } else {
             QMessageBox::critical(this, "Error", "Failed to connect");

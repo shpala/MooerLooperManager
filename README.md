@@ -9,6 +9,8 @@ Manage tracks on your Mooer GL100/GL200 looper pedal from your computer. This is
 - Upload/download/delete tracks
 - Stream audio directly from the pedal (no need to download first)
 - Handle various WAV formats (mono/stereo, 16/24/32-bit)
+- Auto-detect and select from multiple connected Mooer devices
+- Automatic USB permission setup on Linux (installs udev rules when needed)
 - Fast native performance with Qt6 and libusb
 
 ## Installation
@@ -22,17 +24,7 @@ chmod +x MooerLooperManager-x86_64.AppImage
 ./MooerLooperManager-x86_64.AppImage
 ```
 
-### USB Permissions (Linux)
-
-By default, only root can access USB devices. To fix this, install the udev rule:
-
-```bash
-sudo cp 99-mooer-looper.rules /etc/udev/rules.d/
-sudo udevadm control --reload-rules
-sudo udevadm trigger
-```
-
-Then unplug and replug your pedal. You should now be able to use it without sudo.
+On Linux, if USB permissions are missing, the app will automatically prompt to install the required udev rules (requires administrator password).
 
 ### Building from Source
 
@@ -62,13 +54,13 @@ make -j$(nproc)
 
 **Make an AppImage:**
 ```bash
-./build-appimage.sh
+./packaging/appimage/build.sh
 ```
 
 ## Usage
 
-1. Plug in your pedal
-2. Open the app
+1. Plug in your pedal (the app auto-detects connected devices)
+2. Select your device from the dropdown
 3. Hit **Connect**
 4. Click **Refresh** to see your tracks
 5. Use **Play** to stream audio straight from the device

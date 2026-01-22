@@ -1,9 +1,13 @@
 #include "usb_device.h"
 #include <QtEndian>
+#include <QProcess>
+#include <QTemporaryFile>
+#include <QTextStream>
 #include <iostream>
 #include <thread>
 #include <chrono>
 #include <cmath>
+#include <fstream>
 
 USBDevice::USBDevice() : ctx(nullptr), dev_handle(nullptr), connected(false) {
     libusb_init(&ctx);
@@ -14,10 +18,119 @@ USBDevice::~USBDevice() {
     if (ctx) libusb_exit(ctx);
 }
 
-bool USBDevice::connect() {
+std::vector<DeviceInfo> USBDevice::enumerateDevices() {
+    std::vector<DeviceInfo> devices;
+    libusb_context* enumCtx = nullptr;
+    libusb_init(&enumCtx);
+
+    libusb_device** devList;
+    ssize_t count = libusb_get_device_list(enumCtx, &devList);
+
+    for (ssize_t i = 0; i < count; i++) {
+        libusb_device_descriptor desc;
+        if (libusb_get_device_descriptor(devList[i], &desc) < 0) continue;
+
+        if (desc.idVendor != Protocol::VENDOR_ID) continue;
+
+        DeviceInfo info;
+        info.vid = desc.idVendor;
+        info.pid = desc.idProduct;
+        info.bus = libusb_get_bus_number(devList[i]);
+        info.address = libusb_get_device_address(devList[i]);
+        info.hasPermission = false;
+
+        libusb_device_handle* handle = nullptr;
+        if (libusb_open(devList[i], &handle) == 0) {
+            info.hasPermission = true;
+            unsigned char buffer[256];
+            if (desc.iProduct && libusb_get_string_descriptor_ascii(handle, desc.iProduct, buffer, sizeof(buffer)) > 0) {
+                info.name = reinterpret_cast<char*>(buffer);
+            }
+            if (desc.iSerialNumber && libusb_get_string_descriptor_ascii(handle, desc.iSerialNumber, buffer, sizeof(buffer)) > 0) {
+                info.serial = reinterpret_cast<char*>(buffer);
+            }
+            libusb_close(handle);
+        }
+
+        if (info.name.empty()) {
+            info.name = "Mooer Device";
+        }
+
+        devices.push_back(info);
+    }
+
+    libusb_free_device_list(devList, 1);
+    libusb_exit(enumCtx);
+    return devices;
+}
+
+bool USBDevice::needsUdevRule() {
+#ifdef __linux__
+    std::ifstream file("/etc/udev/rules.d/99-mooer-looper.rules");
+    return !file.good();
+#else
+    return false;
+#endif
+}
+
+bool USBDevice::installUdevRule() {
+#ifdef __linux__
+    // Create temporary file with udev rule content
+    QTemporaryFile tempFile;
+    tempFile.setAutoRemove(false);
+    if (!tempFile.open()) {
+        std::cerr << "Failed to create temporary file" << std::endl;
+        return false;
+    }
+
+    QTextStream stream(&tempFile);
+    stream << "# Mooer GL100/GL200 Looper Pedal\n";
+    stream << "# This allows non-root users to access the device\n";
+    stream << "SUBSYSTEM==\"usb\", ATTRS{idVendor}==\""
+           << QString("%1").arg(Protocol::VENDOR_ID, 4, 16, QChar('0'))
+           << "\", MODE=\"0666\", TAG+=\"uaccess\"\n";
+    tempFile.close();
+
+    QString tempPath = tempFile.fileName();
+    QString cmd = QString("sh -c 'cp \"%1\" /etc/udev/rules.d/99-mooer-looper.rules && "
+                          "udevadm control --reload-rules && "
+                          "udevadm trigger'").arg(tempPath);
+
+    QProcess process;
+    process.start("pkexec", QStringList() << "sh" << "-c"
+                  << QString("cp '%1' /etc/udev/rules.d/99-mooer-looper.rules && "
+                             "udevadm control --reload-rules && "
+                             "udevadm trigger").arg(tempPath));
+    process.waitForFinished(-1);
+
+    // Clean up temp file
+    QFile::remove(tempPath);
+
+    return process.exitCode() == 0;
+#else
+    return false;
+#endif
+}
+
+bool USBDevice::connect(uint8_t bus, uint8_t address) {
     if (connected) return true;
 
-    dev_handle = libusb_open_device_with_vid_pid(ctx, Protocol::VENDOR_ID, Protocol::PRODUCT_ID);
+    if (bus == 0 && address == 0) {
+        dev_handle = libusb_open_device_with_vid_pid(ctx, Protocol::VENDOR_ID, Protocol::PRODUCT_ID);
+    } else {
+        libusb_device** devList;
+        ssize_t count = libusb_get_device_list(ctx, &devList);
+
+        for (ssize_t i = 0; i < count; i++) {
+            if (libusb_get_bus_number(devList[i]) == bus &&
+                libusb_get_device_address(devList[i]) == address) {
+                libusb_open(devList[i], &dev_handle);
+                break;
+            }
+        }
+        libusb_free_device_list(devList, 1);
+    }
+
     if (!dev_handle) {
         std::cerr << "Device not found" << std::endl;
         return false;

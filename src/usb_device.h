@@ -7,12 +7,26 @@
 #include <QByteArray>
 #include "protocol.h"
 
+struct DeviceInfo {
+    uint16_t vid;
+    uint16_t pid;
+    uint8_t bus;
+    uint8_t address;
+    std::string name;
+    std::string serial;
+    bool hasPermission;
+};
+
 class USBDevice {
 public:
     USBDevice();
     ~USBDevice();
 
-    bool connect();
+    static std::vector<DeviceInfo> enumerateDevices();
+    static bool installUdevRule();
+    static bool needsUdevRule();
+
+    bool connect(uint8_t bus = 0, uint8_t address = 0);
     void disconnect();
     bool isConnected() const;
 
