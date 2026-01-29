@@ -26,12 +26,12 @@ public:
     static QByteArray createDownloadCommand(int slot, uint16_t chunk = 0);
     static QByteArray createUploadCommand(int slot, uint16_t chunk);
     static QByteArray createInitUploadCommand();
-    static QByteArray createPlayCommand(int slot);
+    static QByteArray createPlayCommand(int slot, uint8_t action = 0x01);
     static QByteArray createPlayStreamCommand(int slot, uint8_t chunk);
 
     static std::vector<TrackInfo> parseTrackList(const QByteArray& data);
     static bool parseTrackInfoHeader(const QByteArray& data, uint32_t& size);
-    
+
     // Audio conversion helpers
     static QByteArray encodeAudioData(const std::vector<int32_t>& samples, bool stereo = true);
     static std::vector<int32_t> parseAudioData(const QByteArray& data, bool skipHeader = true);

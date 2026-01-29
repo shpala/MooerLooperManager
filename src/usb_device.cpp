@@ -9,7 +9,7 @@
 #include <cmath>
 #include <fstream>
 
-USBDevice::USBDevice() : ctx(nullptr), dev_handle(nullptr), connected(false) {
+USBDevice::USBDevice() : ctx(nullptr), dev_handle(nullptr), connected(false), connectedBus(0), connectedAddress(0) {
     libusb_init(&ctx);
 }
 
@@ -155,6 +155,11 @@ bool USBDevice::connect(uint8_t bus, uint8_t address) {
     }
 
     connected = true;
+    if (dev_handle) {
+        libusb_device* dev = libusb_get_device(dev_handle);
+        connectedBus = libusb_get_bus_number(dev);
+        connectedAddress = libusb_get_device_address(dev);
+    }
     return true;
 }
 
@@ -166,6 +171,8 @@ void USBDevice::disconnect() {
         dev_handle = nullptr;
     }
     connected = false;
+    connectedBus = 0;
+    connectedAddress = 0;
 }
 
 bool USBDevice::isConnected() const {
@@ -203,7 +210,7 @@ std::vector<TrackInfo> USBDevice::listTracks() {
         QByteArray cmd = Protocol::createDownloadCommand(i, 0); // Query command is same as download chunk 0
         write(cmd);
         QByteArray resp = read(1024);
-        
+
         bool hasTrack = false;
         uint32_t size = 0;
         double duration = 0;
@@ -225,7 +232,12 @@ void USBDevice::deleteTrack(int slot) {
 }
 
 void USBDevice::playTrack(int slot) {
-    write(Protocol::createPlayCommand(slot));
+    write(Protocol::createPlayCommand(slot, 0x01));
+    read(1024, Protocol::EP_IN_DATA); // Response?
+}
+
+void USBDevice::stopPlayback(int slot) {
+    write(Protocol::createPlayCommand(slot, 0x00));
     read(1024, Protocol::EP_IN_DATA); // Response?
 }
 
@@ -233,7 +245,7 @@ std::vector<int32_t> USBDevice::downloadTrack(int slot, ProgressCallback callbac
     // Get info
     write(Protocol::createDownloadCommand(slot, 0));
     QByteArray firstChunk = read(1024);
-    
+
     uint32_t trackSize = 0;
     if (!Protocol::parseTrackInfoHeader(firstChunk, trackSize)) {
         throw std::runtime_error("Track does not exist");
@@ -244,28 +256,28 @@ std::vector<int32_t> USBDevice::downloadTrack(int slot, ProgressCallback callbac
 
     QByteArray buffer;
     int chunks = (trackSize + 1023) / 1024;
-    
+
     // Start from Chunk 1
     for (int i = 1; i <= chunks; i++) {
         write(Protocol::createDownloadCommand(slot, i));
         QByteArray data = read(1024);
         if (data.isEmpty()) break;
-        
+
         buffer.append(data);
-        
+
         int numFrames = buffer.size() / 6;
         int bytesToProcess = numFrames * 6;
-        
+
         if (bytesToProcess > 0) {
             std::vector<int32_t> samples = Protocol::parseAudioData(buffer.left(bytesToProcess), false);
             fullAudio.insert(fullAudio.end(), samples.begin(), samples.end());
             buffer.remove(0, bytesToProcess);
         }
-        
+
         if (callback && (i % 10 == 0)) callback(fullAudio.size() * 3, trackSize, userData);
     }
     if (callback) callback(trackSize, trackSize, userData);
-    
+
     // Trim if necessary to match trackSize frames
     // trackSize is bytes. 1 frame = 6 bytes. 2 samples per frame.
     // Total samples = (trackSize / 6) * 2 = trackSize / 3.
@@ -286,10 +298,10 @@ void USBDevice::uploadTrack(int slot, const std::vector<int32_t>& audio, Progres
     // 2. Prepare Data
     QByteArray audioData = Protocol::encodeAudioData(audio);
     uint32_t size = audioData.size();
-    
+
     QByteArray metaChunk(1024, 0);
     qToLittleEndian<uint32_t>(size, reinterpret_cast<uchar*>(metaChunk.data()));
-    
+
     // Send Chunk 0 (Meta)
     write(Protocol::createUploadCommand(slot, 0));
     read(64, Protocol::EP_IN_STATUS);
@@ -302,49 +314,75 @@ void USBDevice::uploadTrack(int slot, const std::vector<int32_t>& audio, Progres
         int offset = i * 1024;
         QByteArray chunk = audioData.mid(offset, 1024);
         if (chunk.size() < 1024) chunk.resize(1024); // Zero pad
-        
+
         write(Protocol::createUploadCommand(slot, i + 1));
         read(64, Protocol::EP_IN_STATUS);
-        
+
         write(chunk, 0x03);
         read(64, Protocol::EP_IN_STATUS);
-        
+
         if (callback && (i % 10 == 0)) callback(offset, size, userData);
     }
     if (callback) callback(size, size, userData);
-    
+
     std::this_thread::sleep_for(std::chrono::seconds(1));
     // Finalize/Verify
     write(Protocol::createDownloadCommand(slot, 0)); // Query
     read(1024);
 }
 
-void USBDevice::startStreaming(int slot, std::function<void(const std::vector<int32_t>&)> audioCallback, std::atomic<bool>& stopFlag) {
+void USBDevice::startStreaming(int slot, std::function<void(const std::vector<int32_t>&)> audioCallback, std::atomic<bool>& stopFlag,
+                               ProgressCallback progressCallback, void* progressUserData, int startChunk) {
     // Get info
     write(Protocol::createDownloadCommand(slot, 0));
     QByteArray firstChunk = read(1024);
     uint32_t size;
     if (!Protocol::parseTrackInfoHeader(firstChunk, size)) return;
-    
+
     int chunks = (size + 1023) / 1024;
     QByteArray remainderBuffer;
-    
-    for (int i = 1; i <= chunks; i++) {
+
+    if (startChunk < 1) startChunk = 1;
+
+    bool firstChunkProcessed = false;
+
+    for (int i = startChunk; i <= chunks; i++) {
         if (stopFlag) break;
-        
+
         write(Protocol::createDownloadCommand(slot, i));
         QByteArray data = read(1024);
         if (data.isEmpty()) break;
-        
+
+        if (!firstChunkProcessed && startChunk > 1) {
+            // Fix alignment issues when starting from arbitrary chunk
+            // Global offset = (chunkIndex - 1) * 1024
+            // We need to ensure we are at a 6-byte boundary
+            long long globalOffset = (long long)(startChunk - 1) * 1024;
+            int alignment = globalOffset % 6;
+            if (alignment != 0) {
+                int toDiscard = 6 - alignment;
+                if (toDiscard < data.size()) {
+                    data.remove(0, toDiscard);
+                } else {
+                     data.clear();
+                }
+            }
+            firstChunkProcessed = true;
+        }
+
         remainderBuffer.append(data);
-        
+
         int numFrames = remainderBuffer.size() / 6;
         int bytesToProcess = numFrames * 6;
-        
+
         if (bytesToProcess > 0) {
             std::vector<int32_t> samples = Protocol::parseAudioData(remainderBuffer.left(bytesToProcess), false);
             audioCallback(samples);
             remainderBuffer.remove(0, bytesToProcess);
+        }
+
+        if (progressCallback) {
+            progressCallback(i, chunks, progressUserData);
         }
     }
 }

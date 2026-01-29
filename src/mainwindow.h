@@ -9,6 +9,14 @@
 #include <QComboBox>
 #include <QThread>
 #include <QMap>
+#include <QSettings>
+#include <QShortcut>
+#include <QDragEnterEvent>
+#include <QDragLeaveEvent>
+#include <QDropEvent>
+#include <QMimeData>
+#include <QMenu>
+#include <QSlider>
 #include <atomic>
 #include <libusb-1.0/libusb.h>
 #include "usb_device.h"
@@ -38,6 +46,19 @@ private:
                                libusb_hotplug_event event, void* userData);
 };
 
+class FileDropTableWidget : public QTableWidget {
+    Q_OBJECT
+public:
+    using QTableWidget::QTableWidget;
+signals:
+    void fileDropped(int row, QString filePath);
+protected:
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dragMoveEvent(QDragMoveEvent* event) override;
+    void dragLeaveEvent(QDragLeaveEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
+};
+
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
@@ -49,11 +70,14 @@ private slots:
     void onRefreshDevicesClicked();
     void onConnectClicked();
     void onRefreshClicked();
-    void onUploadClicked(int slot);
+    void onUploadClicked(int slot, QString manualPath = QString());
     void onDownloadClicked(int slot);
     void onDeleteClicked(int slot);
     void onPlayClicked(int slot);
-    
+    void onPlayPauseAction();
+    void onCustomContextMenuRequested(const QPoint& pos);
+    void onFileDropped(int row, QString filePath);
+
     void onWorkerFinished();
     void onWorkerError(QString msg);
     void onTracksLoaded(std::vector<TrackInfo> tracks);
@@ -67,20 +91,35 @@ private:
     QComboBox* deviceCombo;
     std::vector<DeviceInfo> deviceList;
 
-    QTableWidget* trackTable;
+    FileDropTableWidget* trackTable;
     QPushButton* connectBtn;
     QPushButton* refreshBtn;
     QLabel* statusLabel;
     QProgressBar* progressBar;
+    QSlider* seekSlider; // Replaces progressBar
+    QLabel* timeLabel;
+    QSlider* volumeSlider;
+    QLabel* volumeLabel;
+    std::atomic<int> playbackVolume;
 
     int currentPlayingSlot;
-    QMap<int, QPushButton*> playButtons;
+    double currentPlayingDuration;
+    double currentProgressTime;
+    bool isSeeking; // Flag to track if user is interacting with seek slider
+    bool isPaused;
+    QPushButton* playPauseBtn; // Global play/pause button
+    QPushButton* stopBtn;      // Stop button
+    QPushButton* cancelBtn;
+    QString lastFileDialogDir;
+    std::vector<TrackInfo> cachedTracks;
 
     void setupUi();
     void refreshDeviceList();
     void updateTable();
     void updatePlayButtonState();
     bool stopExistingWorker();
+    void setActionsEnabled(bool enabled);
+    QIcon styledIcon(QStyle::StandardPixmap sp);
 };
 
 #endif // MAINWINDOW_H

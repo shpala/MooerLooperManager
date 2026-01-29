@@ -100,7 +100,7 @@ std::vector<int32_t> AudioUtils::loadWavFile(const std::string& filename) {
                  }
             }
         }
-        
+
         output.push_back(left);
         output.push_back(right);
     }
@@ -119,13 +119,13 @@ bool AudioUtils::saveWavFile(const std::string& filename, const std::vector<int3
     header.format_type = 1; // PCM
     header.channels = 2;
     header.sample_rate = 44100;
-    
+
     // Save as 32-bit PCM to match Python behavior
     header.bits_per_sample = 32; 
     header.block_align = 4 * 2; // 32-bit * 2 channels
     header.byterate = 44100 * header.block_align;
     memcpy(header.data_chunk_header, "data", 4);
-    
+
     // 32-bit stereo frames
     int numSamples = samples.size() / 2;
     header.data_size = numSamples * 8; // 8 bytes per frame (4 bytes * 2 channels)
@@ -137,6 +137,6 @@ bool AudioUtils::saveWavFile(const std::string& filename, const std::vector<int3
     // The samples from device/internal logic are like 0xXXXXXX00 (24-bit in 32-bit container, shifted)
     // Python saves these int32 values directly.
     file.write((const char*)samples.data(), samples.size() * sizeof(int32_t));
-    
+
     return true;
 }

@@ -51,7 +51,7 @@ QByteArray Protocol::createDeleteCommand(int slot) {
     cmd[3] = 0x03;
     cmd[4] = 0x00;
     cmd[5] = 0x88;
-    
+
     // Slot at offset 6 (Little Endian)
     qToLittleEndian<uint16_t>(slot, reinterpret_cast<uchar*>(cmd.data() + 6));
 
@@ -71,7 +71,7 @@ QByteArray Protocol::createDownloadCommand(int slot, uint16_t chunk) {
     cmd[5] = 0x82; // SUBCMD_DOWNLOAD
     cmd[6] = (uint8_t)slot;
     cmd[7] = 0x00;
-    
+
     // Chunk at offset 8 (Little Endian)
     qToLittleEndian<uint16_t>(chunk, reinterpret_cast<uchar*>(cmd.data() + 8));
 
@@ -91,7 +91,7 @@ QByteArray Protocol::createUploadCommand(int slot, uint16_t chunk) {
     cmd[5] = 0x84; // SUBCMD_UPLOAD
     cmd[6] = (uint8_t)slot;
     cmd[7] = 0x00;
-    
+
     qToLittleEndian<uint16_t>(chunk, reinterpret_cast<uchar*>(cmd.data() + 8));
 
     uint16_t crc = calculateCRC16(cmd.mid(3, 9));
@@ -115,15 +115,15 @@ QByteArray Protocol::createInitUploadCommand() {
     return cmd;
 }
 
-QByteArray Protocol::createPlayCommand(int slot) {
+QByteArray Protocol::createPlayCommand(int slot, uint8_t action) {
     QByteArray cmd(64, 0);
     cmd[0] = 0x3F; cmd[1] = 0xAA; cmd[2] = 0x55;
     cmd[3] = 0x07;
     cmd[4] = 0x00;
     cmd[5] = 0x8A; // SUBCMD_PLAY
-    cmd[6] = 0x01; // Play Action
+    cmd[6] = action; // Play Action (0x01 = Play, 0x00 = Stop)
     cmd[7] = 0x00;
-    
+
     qToLittleEndian<uint16_t>(slot, reinterpret_cast<uchar*>(cmd.data() + 8));
 
     uint16_t crc = calculateCRC16(cmd.mid(3, 9));
@@ -154,18 +154,18 @@ QByteArray Protocol::createPlayStreamCommand(int slot, uint8_t chunk) {
 std::vector<TrackInfo> Protocol::parseTrackList(const QByteArray& data) {
     std::vector<TrackInfo> tracks;
     int offset = 16;
-    
+
     for (int i = 0; i < MAX_TRACKS; i++) {
         if (offset + 8 > data.size()) break;
-        
+
         bool hasTrack = data[offset] != 0;
         uint32_t size = qFromLittleEndian<uint32_t>(reinterpret_cast<const uchar*>(data.data() + offset + 4));
-        
+
         double duration = 0;
         if (hasTrack) {
             duration = (double)size / (6.0 * 44100.0);
         }
-        
+
         tracks.push_back({i, hasTrack, duration, size});
         offset += 8;
     }
@@ -182,15 +182,15 @@ bool Protocol::parseTrackInfoHeader(const QByteArray& data, uint32_t& size) {
 std::vector<int32_t> Protocol::parseAudioData(const QByteArray& data, bool skipHeader) {
     int offset = skipHeader ? 18 : 0;
     if (offset >= data.size()) return {};
-    
+
     int bytesAvailable = data.size() - offset;
     int frames = bytesAvailable / 6;
-    
+
     std::vector<int32_t> samples;
     samples.reserve(frames * 2);
-    
+
     const uchar* ptr = reinterpret_cast<const uchar*>(data.data() + offset);
-    
+
     for (int i = 0; i < frames * 2; i++) {
         // 3 bytes per sample to int32
         int32_t val = ptr[0] | (ptr[1] << 8) | (ptr[2] << 16);
@@ -198,11 +198,11 @@ std::vector<int32_t> Protocol::parseAudioData(const QByteArray& data, bool skipH
         val = (val << 8) >> 8;
         // Scale to 32-bit (optional, but matches python logic)
         val = val << 8;
-        
+
         samples.push_back(val);
         ptr += 3;
     }
-    
+
     return samples;
 }
 
@@ -212,14 +212,14 @@ QByteArray Protocol::encodeAudioData(const std::vector<int32_t>& samples, bool s
     // The Python implementation handles mono-to-stereo conversion.
     // Here we assume input is already appropriate stereo interleaved data for simplicity,
     // or we implement the mono check logic in the caller.
-    
+
     QByteArray output;
     output.reserve(samples.size() * 3);
-    
+
     for (int32_t sample : samples) {
         // Scale down from 32-bit to 24-bit
         int32_t val = sample >> 8;
-        
+
         output.append((char)(val & 0xFF));
         output.append((char)((val >> 8) & 0xFF));
         output.append((char)((val >> 16) & 0xFF));

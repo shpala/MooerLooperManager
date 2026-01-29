@@ -7,6 +7,8 @@ Manage tracks on your Mooer GL100/GL200 looper pedal from your computer. This is
 ## What it does
 
 - Upload/download/delete tracks
+- Drag-and-drop support for uploading WAV files
+- Right-click context menu for quick track actions
 - Stream audio directly from the pedal (no need to download first)
 - Handle various WAV formats (mono/stereo, 16/24/32-bit)
 - Auto-detect and select from multiple connected Mooer devices
