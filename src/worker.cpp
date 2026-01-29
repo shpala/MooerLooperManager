@@ -29,7 +29,7 @@ void Worker::run() {
             auto data = device->downloadTrack(slot, callback, this);
             AudioUtils::saveWavFile(filename, data);
         } else if (operation == Upload) {
-            auto audio = AudioUtils::loadWavFile(filename);
+            auto audio = AudioUtils::loadAudioFile(filename);
             auto callback = [](size_t c, size_t t, void* u) {
                 static_cast<Worker*>(u)->emit progress(c, t);
             };

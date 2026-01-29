@@ -1,4 +1,10 @@
 #include "audio_utils.h"
+#include <QAudioDecoder>
+#include <QAudioBuffer>
+#include <QAudioFormat>
+#include <QEventLoop>
+#include <QFileInfo>
+#include <QUrl>
 #include <fstream>
 #include <iostream>
 #include <cstring>
@@ -22,6 +28,82 @@ struct WavHeader {
     uint32_t data_size;
 };
 #pragma pack(pop)
+
+std::vector<int32_t> AudioUtils::loadAudioFile(const std::string& filename) {
+    QString qFilename = QString::fromStdString(filename);
+    
+    // For WAV files, try the built-in parser first as it's faster and supports 44.1kHz directly
+    if (qFilename.toLower().endsWith(".wav")) {
+        try {
+            return loadWavFile(filename);
+        } catch (const std::exception& e) {
+            // If it failed because of sample rate, the decoder will handle it
+            std::cerr << "Native WAV loader failed: " << e.what() << ". Falling back to QAudioDecoder." << std::endl;
+        }
+    }
+
+    QAudioDecoder decoder;
+    QAudioFormat format;
+    format.setSampleRate(44100);
+    format.setChannelCount(2);
+    format.setSampleFormat(QAudioFormat::Int32);
+
+    decoder.setAudioFormat(format);
+    decoder.setSource(QUrl::fromLocalFile(qFilename));
+
+    std::vector<int32_t> output;
+    QEventLoop loop;
+    bool errorOccurred = false;
+    QString errorMsg;
+
+    QObject::connect(&decoder, &QAudioDecoder::bufferReady, [&]() {
+        QAudioBuffer buffer = decoder.read();
+        QAudioFormat bufferFormat = buffer.format();
+        int count = buffer.sampleCount();
+        
+        if (bufferFormat.sampleFormat() == QAudioFormat::Int32) {
+            const int32_t* data = buffer.constData<int32_t>();
+            size_t currentSize = output.size();
+            output.resize(currentSize + count);
+            std::memcpy(output.data() + currentSize, data, count * sizeof(int32_t));
+        } else if (bufferFormat.sampleFormat() == QAudioFormat::Int16) {
+            const int16_t* data = buffer.constData<int16_t>();
+            for (int i = 0; i < count; ++i) {
+                // Scale 16-bit to 32-bit
+                output.push_back(static_cast<int32_t>(data[i]) << 16);
+            }
+        } else if (bufferFormat.sampleFormat() == QAudioFormat::Float) {
+            const float* data = buffer.constData<float>();
+            for (int i = 0; i < count; ++i) {
+                // Scale float to 32-bit
+                float val = data[i];
+                if (val > 1.0f) val = 1.0f;
+                if (val < -1.0f) val = -1.0f;
+                output.push_back(static_cast<int32_t>(val * 2147483647.0f));
+            }
+        }
+    });
+
+    QObject::connect(&decoder, &QAudioDecoder::finished, &loop, &QEventLoop::quit);
+    QObject::connect(&decoder, qOverload<QAudioDecoder::Error>(&QAudioDecoder::error), [&](QAudioDecoder::Error error) {
+        errorOccurred = true;
+        errorMsg = decoder.errorString();
+        loop.quit();
+    });
+
+    decoder.start();
+    loop.exec();
+
+    if (errorOccurred) {
+        throw std::runtime_error("Decoding failed: " + errorMsg.toStdString());
+    }
+
+    if (output.empty()) {
+        throw std::runtime_error("Decoding failed: No data produced. Make sure you have the necessary codecs installed.");
+    }
+
+    return output;
+}
 
 std::vector<int32_t> AudioUtils::loadWavFile(const std::string& filename) {
     std::ifstream file(filename, std::ios::binary);

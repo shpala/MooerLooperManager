@@ -115,9 +115,11 @@ void FileDropTableWidget::dropEvent(QDropEvent* event) {
         QList<QUrl> urlList = mimeData->urls();
         if (!urlList.isEmpty()) {
             QString filePath = urlList.first().toLocalFile();
-            if (!filePath.toLower().endsWith(".wav")) {
+            QString ext = QFileInfo(filePath).suffix().toLower();
+            static const QStringList supportedExts = {"wav", "mp3", "flac", "ogg", "m4a", "wma"};
+            if (!supportedExts.contains(ext)) {
                 QMessageBox::warning(nullptr, "Unsupported File",
-                    "Only WAV files are supported.");
+                    "Unsupported audio format. Supported: WAV, MP3, FLAC, OGG, M4A, WMA.");
                 return;
             }
             QPoint pos = event->position().toPoint();
@@ -742,8 +744,8 @@ void MainWindow::onUploadClicked(int slot, QString manualPath) {
 
     QString filename = manualPath;
     if (filename.isEmpty()) {
-        filename = QFileDialog::getOpenFileName(this, "Open Wav",
-            lastFileDialogDir, "WAV Files (*.wav);;All Files (*)");
+        filename = QFileDialog::getOpenFileName(this, "Open Audio File",
+            lastFileDialogDir, "Audio Files (*.wav *.mp3 *.flac *.ogg *.m4a *.wma);;WAV Files (*.wav);;All Files (*)");
     }
 
     if (filename.isEmpty()) return;

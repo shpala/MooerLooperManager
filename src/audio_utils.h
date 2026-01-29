@@ -7,6 +7,9 @@
 
 class AudioUtils {
 public:
+    // Decodes any audio file supported by Qt and returns stereo interleaved 32-bit samples (44100 Hz)
+    static std::vector<int32_t> loadAudioFile(const std::string& filename);
+
     // Reads WAV file and returns stereo interleaved 32-bit samples (scaled)
     // Handles resampling to 44100 Hz if possible (simple decimation/interpolation) or throws
     // Handles Mono -> Stereo conversion
